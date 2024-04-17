@@ -6,6 +6,7 @@ import torch
 import warnings
 import numpy as np
 import pandas as pd
+import os
 
 from qlib.data.dataset import DatasetH, TSDatasetH, TSDataSampler
 from typing import Callable, Union, List, Tuple, Dict, Text, Optional
@@ -471,6 +472,161 @@ class MASTERTSDatasetH(TSDatasetH):
             marketData = pd.DataFrame(marketData.values, columns = cols, index = marketData.index)
             data = data.iloc[:,:-1].join(marketData).join(data.iloc[:,-1])
         #################################################################################
+        flt_kwargs = copy.deepcopy(kwargs)
+        if flt_col is not None:
+            flt_kwargs["col_set"] = flt_col
+            flt_data = super()._prepare_seg(ext_slice, **flt_kwargs)
+            assert len(flt_data.columns) == 1
+        else:
+            flt_data = None
+
+        tsds = TSDataSampler(
+            data=data,
+            start=start,
+            end=end,
+            step_len=self.step_len,
+            dtype=dtype,
+            flt_data=flt_data,
+            fillna_type = "ffill+bfill"
+        )
+        return tsds
+# ===============================================================================================================
+
+def move_open_in_place(directory_path) -> None:
+    """
+    Moves the "open" column to the last column in all CSV files within a directory.
+
+    Parameters:
+    - directory_path (str): The path to the directory containing the CSV files.
+    """
+    for root, _, files in os.walk(directory_path):
+        for file in files:
+            if file.endswith('.csv'):
+                file_path = os.path.join(root, file)
+                df = pd.read_csv(file_path)
+                
+                if 'open' in df.columns and 'open' != df.columns[-1]:
+                    columns = df.columns.tolist()
+                    columns.remove('open')
+                    columns.append('open')
+                    df = df[columns]
+
+                df.to_csv(file_path, index=False)
+    return None
+
+class NewsDatasetPreprocessor:
+    """
+    Renames the "datetime" column to "date", changes the date format, and combines the "title" and "summary" columns.
+    Then, groups the data by the "date" column and combines the information for each day.
+
+    Parameters:
+    - directory_path (str): The path to the directory containing the CSV files.
+    """
+    def __init__(self, **kwargs,):
+        print(kwargs)
+        self.directory_path = kwargs.pop('directory_path')
+        self.output_file_path = kwargs.pop('output_file_path')
+    
+    def preprocess(self):
+        print(self.directory_path)
+        for root, _, files in os.walk(self.directory_path):
+            print(files)
+            for file in files:
+                if file.endswith('.csv'):
+                    file_path = os.path.join(root, file)
+                    df = pd.read_csv(file_path, encoding = 'utf-8')              
+
+                    if 'datetime' in df.columns:
+                        df = df.sort_values(by='datetime')
+                        df['date'] = pd.to_datetime(df['datetime']).dt.date
+                        df.drop(columns=['datetime'], inplace=True)
+                    related = df['related'][0]
+                    df['information'] = df.apply(lambda row: f"Headline: {row['headline']}, source:{row['source']}, summary: {row['summary'] if 'Zacks.com' not in str(row['summary']) else 'No summary'}", axis=1)
+                    df = df[['date', 'information']]
+                    df_grouped = df.groupby('date')['information'].apply(lambda x: ', '.join(x)).reset_index()
+                    df_grouped["related"] = related
+
+                    output_file_path = os.path.join(self.output_file_path, file)
+                    df_grouped.to_csv(output_file_path, index=True, encoding = 'utf-8')
+
+class NewsDatasetHandler:
+    def __init__(self, slc, **kwargs,):
+        self.news_data_dir = kwargs.pop('news_data_dirs')
+        self.symbol_list = kwargs.pop('symbol_list')
+        self.local_calendar_dir = kwargs.pop('local_calendar_dir')
+        self.start = slc.start
+        self.end = slc.stop
+        self._check_timestamp()
+        self.trading_calendar = self._get_trading_day()
+
+    def _get_trading_day(self):
+        try:
+            from qlib.data import D
+            return D.calendar(start_time=str(self.start), end_date=str(self.end))
+        except:
+            assert os.path.exists(self.local_calendar_dir)
+            calendar = pd.read_csv(self.local_calendar_dir, engine='python', names=["date"])
+            calendar['date'] = pd.to_datetime(calendar['date'])
+            calendar = calendar[(calendar['date'] >= self.start) & (calendar['date'] <= self.end)] 
+            calendar['date'] = pd.to_datetime(calendar['date'].dt.date)
+            return calendar.reset_index()
+
+    def _check_timestamp(self):
+        if not isinstance(self.start, pd.Timestamp) or not isinstance(self.end, pd.Timestamp):
+            try: 
+                self.start = pd.to_datetime(self.start)
+                self.end = pd.to_datetime(self.end)
+            except:
+                raise ValueError("The start and end of the time range must be datetime or could be inverted to datetime.")
+
+        return None
+
+    def read_and_align(self) -> pd.DataFrame:
+        ult_df = pd.DataFrame()
+        dfs = []
+        for symbol in self.symbol_list:
+            file_path = os.path.join(self.news_data_dir, f"{symbol}.csv")
+            assert os.path.exists(file_path), f"{symbol}.csv not exist!"
+            news = pd.read_csv(file_path)
+            related = news["related"]
+            news['date'] = pd.to_datetime(news['date'])
+            news = news[(news['date'] >= self.start) & (news['date'] <= self.end)]
+            news['date'] = news['date'].map(lambda x: self.trading_calendar['date'].loc[self.trading_calendar['date'] >= x].min())
+            merged_df = self.trading_calendar.join(news.set_index('date'), on='date', how='left')
+            merged_df['information'] = merged_df['information'].apply(lambda x: str(x))
+            merged_df = merged_df.groupby('date')['information'].agg(lambda x: ''.join(x)).reset_index(name='information')
+            merged_df["related"] = related
+            merged_df = merged_df.set_index(['date', 'related'])
+            dfs.append(merged_df)
+        ult_df = pd.concat(dfs, ignore_index=False).sort_index()
+        return ult_df
+
+class MMTSDatasetH(TSDatasetH):
+    def __init__(self, **kwargs,):
+        super(MMTSDatasetH, self).__init__(**kwargs)
+        self.news_data_dir = os.path.expanduser(kwargs.pop("news_data_dir", ''))
+        self.calendar_dir = os.path.expanduser(kwargs.pop("local_calendar_dir", None))
+        self.symbol_list = kwargs.pop("symbol_list", [])
+
+    def _prepare_seg(self, slc: slice, **kwargs) -> TSDataSampler:
+        dtype = kwargs.pop("dtype", None)
+        if not isinstance(slc, slice):
+            slc = slice(*slc)
+        start, end = slc.start, slc.stop
+        flt_col = kwargs.pop("flt_col", None)
+        # TSDatasetH will retrieve more data for complete time-series
+
+        ext_slice = self._extend_slice(slc, self.cal, self.step_len)
+        data = super(TSDatasetH, self)._prepare_seg(ext_slice, **kwargs)
+        
+        # add news data
+        news_handler_config = kwargs.pop('news_handler_config')
+        news_data_h = NewsDatasetHandler(slc, **news_handler_config)
+        news_data = news_data_h.read_and_align()
+        data = data.iloc[:,:-1].join(news_data).join(data.iloc[:,-1])
+        print(data)
+        exit()
+        
         flt_kwargs = copy.deepcopy(kwargs)
         if flt_col is not None:
             flt_kwargs["col_set"] = flt_col

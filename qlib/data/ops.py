@@ -15,8 +15,9 @@ from ..log import get_module_logger
 from ..utils import get_callable_kwargs
 
 try:
-    from ._libs.rolling import rolling_slope, rolling_rsquare, rolling_resi
-    from ._libs.expanding import expanding_slope, expanding_rsquare, expanding_resi
+    print()
+    # from ._libs.rolling import rolling_slope, rolling_rsquare, rolling_resi
+    # from ._libs.expanding import expanding_slope, expanding_rsquare, expanding_resi
 except ImportError:
     print(
         "#### Do not import qlib package in the repository directory in case of importing qlib from . without compiling #####"

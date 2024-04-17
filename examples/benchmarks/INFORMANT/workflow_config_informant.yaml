@@ -1,0 +1,107 @@
+qlib_init:
+    provider_uri: "~/.qlib/qlib_data/my_data"
+    region: us
+market: &market nasdaq100
+benchmark: &benchmark ^ndx
+symbol_list: &symbol_list ['AAPL', 'ABNB', 'ADBE', 'ADI', 'ADP', 'ADSK', 'AEP', 'ALGN', 'AMAT', 'AMD', 'AMGN', 'AMZN', 'ANSS', 'ASML', 'ATVI', 'AVGO', 'AZN', 'BIIB', 'BKNG', 'BKR', 'CDNS', 'CEG', 'CHTR', 'CMCSA', 'COST', 'CPRT', 'CRWD', 'CSCO', 'CSGP', 'CSX', 'CTAS', 'CTSH', 'DDOG', 'DLTR', 'DXCM', 'EA', 'EBAY', 'ENPH', 'EXC', 'FANG', 'FAST', 'FTNT', 'GFS', 'GILD', 'GOOG', 'GOOGL', 'HON', 'IDXX', 'ILMN', 'INTC', 'INTU', 'ISRG', 'JD', 'KDP', 'KHC', 'KLAC', 'LCID', 'LRCX', 'LULU', 'MAR', 'MCHP', 'MDLZ', 'MELI', 'META', 'MNST', 'MRNA', 'MRVL', 'MSFT', 'MU', 'NFLX', 'NVDA', 'NXPI', 'ODFL', 'ORLY', 'PANW', 'PAYX', 'PCAR', 'PDD', 'PEP', 'PYPL', 'QCOM', 'REGN', 'RIVN', 'ROST', 'SBUX', 'SGEN', 'SIRI', 'SNPS', 'TEAM', 'TMUS', 'TSLA', 'TXN', 'VRSK', 'VRTX', 'WBA', 'WBD', 'WDAY', 'XEL', 'ZM', 'ZS']
+data_handler_config: &data_handler_config
+    start_time: 2021-11-17
+    end_time: 2023-11-17
+    fit_start_time: 2021-11-17
+    fit_end_time: 2023-03-17
+    instruments: *market
+    infer_processors:
+        - class: RobustZScoreNorm
+          kwargs:
+              fields_group: feature
+              clip_outlier: true
+        - class: Fillna
+          kwargs:
+              fields_group: feature
+    learn_processors:
+        - class: DropnaLabel
+        - class: CSRankNorm
+          kwargs:
+              fields_group: label
+    label: ["open"] 
+market_data_handler_config: &market_data_handler_config
+    start_time: 2021-11-17
+    end_time: 2023-11-17
+    fit_start_time: 2021-11-17
+    fit_end_time: 2023-03-17
+    instruments: *market
+    infer_processors:
+        - class: RobustZScoreNorm
+          kwargs:
+              fields_group: feature
+              clip_outlier: true
+        - class: Fillna
+          kwargs:
+              fields_group: feature
+port_analysis_config: &port_analysis_config
+    strategy:
+        class: TopkDropoutStrategy
+        module_path: qlib.contrib.strategy
+        kwargs:
+            signal: <PRED>
+            topk: 30
+            n_drop: 30
+    backtest:
+        start_time: 2023-07-17
+        end_time: 2023-11-17
+        account: 100000000
+        benchmark: *benchmark
+        exchange_kwargs:
+            deal_price: close
+task:
+    model:
+        class: ToyFusionModel
+        module_path: qlib.contrib.model.toybench1
+        kwargs:
+            seed: 0
+            n_epochs: 40
+            lr: 0.000008
+            train_stop_loss_thred: 0.95
+            market: *market
+            benchmark: *benchmark
+            save_prefix: *market
+    preprocess:
+        preprocessed: False
+        class:  NewsDatasetPreprocessor
+        module_path: qlib.contrib.data.dataset
+        kwargs:
+            directory_path: "~/.qlib/qlib_data/raw_news"
+            output_file_path: "~/.qlib/qlib_data/news"
+    news_handler_config: &news_handler_config
+        news_data_dir: "~/.qlib/qlib_data/news"
+        symbol_list: *symbol_list
+        local_calendar_dir: "~/.qlib/qlib_data/my_data/calendars/day.txt"
+    dataset:
+        class: MMTSDatasetH
+        module_path: qlib.contrib.data.dataset
+        kwargs:
+            handler:
+                class: Alpha158
+                module_path: qlib.contrib.data.handler
+                kwargs: *data_handler_config
+            news_handler_config: *news_handler_config
+            segments:
+                train: [2021-11-17, 2023-03-17]
+                valid: [2023-03-17, 2023-07-17]
+                test: [2023-07-17, 2023-11-17]
+            step_len: 8
+    record: 
+        - class: SignalRecord
+          module_path: qlib.workflow.record_temp
+          kwargs: 
+            model: <MODEL>
+            dataset: <DATASET>
+        - class: SigAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs: 
+            ana_long_short: False
+            ann_scaler: 252
+        - class: PortAnaRecord
+          module_path: qlib.workflow.record_temp
+          kwargs: 
+            config: *port_analysis_config

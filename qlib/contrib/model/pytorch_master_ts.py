@@ -252,8 +252,12 @@ class DailyBatchSamplerRandom(Sampler):
 
 
 class MASTERModel(Model):
-    def __init__(self, d_feat: int = 158, d_model: int = 256, t_nhead: int = 4, s_nhead: int = 2, gate_input_start_index=158, gate_input_end_index=221,
-            T_dropout_rate=0.5, S_dropout_rate=0.5, beta=None, n_epochs = 40, lr = 8e-6, GPU=0, seed=0, train_stop_loss_thred=None, save_path = 'model/', save_prefix= '', benchmark = 'SH000300', market = 'csi300', only_backtest = False):
+    def __init__(self, d_feat: int = 158, d_model: int = 256, 
+                 t_nhead: int = 4, s_nhead: int = 2, gate_input_start_index=158,
+                 gate_input_end_index=221, T_dropout_rate=0.5, S_dropout_rate=0.5, 
+                 beta=None, n_epochs = 40, lr = 8e-6, GPU=0, seed=0, train_stop_loss_thred=None, 
+                 save_path = 'model/', save_prefix= '', benchmark = 'SH000300', 
+                 market = 'csi300', only_backtest = False):
         
         self.d_model = d_model
         self.d_feat = d_feat
